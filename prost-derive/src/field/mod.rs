@@ -2,7 +2,7 @@ mod group;
 mod map;
 mod message;
 mod oneof;
-mod scalar;
+pub(crate) mod scalar;
 
 use std::fmt;
 use std::slice;

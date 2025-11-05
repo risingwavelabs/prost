@@ -1,3 +1,4 @@
+use core::str::FromStr;
 use std::fmt;
 
 use anyhow::{anyhow, bail, Error};
@@ -13,6 +14,7 @@ pub struct Field {
     pub ty: Ty,
     pub kind: Kind,
     pub tag: u32,
+    pub wrapper: Option<Wrapper>,
 }
 
 impl Field {
@@ -22,6 +24,7 @@ impl Field {
         let mut packed = None;
         let mut default = None;
         let mut tag = None;
+        let mut wrapper = None;
 
         let mut unknown_attrs = Vec::new();
 
@@ -36,6 +39,8 @@ impl Field {
                 set_option(&mut label, l, "duplicate label attributes")?;
             } else if let Some(d) = DefaultValue::from_attr(attr)? {
                 set_option(&mut default, d, "duplicate default attributes")?;
+            } else if let Some(w) = Wrapper::from_attr(attr)? {
+                set_option(&mut wrapper, w, "duplicate wrapper attributes")?;
             } else {
                 unknown_attrs.push(attr);
             }
@@ -86,7 +91,12 @@ impl Field {
             (Some(Label::Repeated), _, false) => Kind::Repeated,
         };
 
-        Ok(Some(Field { ty, kind, tag }))
+        Ok(Some(Field {
+            ty,
+            kind,
+            tag,
+            wrapper,
+        }))
     }
 
     pub fn new_oneof(attrs: &[Meta]) -> Result<Option<Field>, Error> {
@@ -117,6 +127,11 @@ impl Field {
 
         match self.kind {
             Kind::Plain(ref default) => {
+                let ident = if self.wrapper.is_some() {
+                    quote! {#ident.0}
+                } else {
+                    ident
+                };
                 let default = default.typed();
                 quote! {
                     if #ident != #default {
@@ -124,12 +139,30 @@ impl Field {
                     }
                 }
             }
-            Kind::Optional(..) => quote! {
-                if let ::core::option::Option::Some(ref value) = #ident {
-                    #encode_fn(#tag, value, buf);
+            Kind::Optional(..) => {
+                let value = if self.wrapper.is_some() {
+                    quote! {&value.0}
+                } else {
+                    quote! {value}
+                };
+                quote! {
+                    if let ::core::option::Option::Some(value) = &#ident {
+                        #encode_fn(#tag, #value, buf);
+                    }
                 }
             },
-            Kind::Required(..) | Kind::Repeated | Kind::Packed => quote! {
+            Kind::Packed => {
+                let ident = if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {#type_name::raw_slice(&#ident)}
+                } else {
+                    quote! {&#ident}
+                };
+                quote! {
+                    #encode_fn(#tag, #ident, buf);
+                }
+            }
+            Kind::Required(..) | Kind::Repeated => quote! {
                 #encode_fn(#tag, &#ident, buf);
             },
         }
@@ -149,11 +182,22 @@ impl Field {
             Kind::Plain(..) | Kind::Required(..) | Kind::Repeated | Kind::Packed => quote! {
                 #merge_fn(wire_type, #ident, buf, ctx)
             },
-            Kind::Optional(..) => quote! {
-                #merge_fn(wire_type,
+            Kind::Optional(..) => {
+                if self.wrapper.is_some() {
+                    quote! {
+                        #merge_fn(wire_type,
+                          &mut #ident.get_or_insert_with(::core::default::Default::default).0,
+                          buf,
+                          ctx)
+                    }
+                } else {
+                    quote! {
+                        #merge_fn(wire_type,
                           #ident.get_or_insert_with(::core::default::Default::default),
                           buf,
                           ctx)
+                    }
+                }
             },
         }
     }
@@ -172,6 +216,11 @@ impl Field {
         match self.kind {
             Kind::Plain(ref default) => {
                 let default = default.typed();
+                let ident = if self.wrapper.is_some() {
+                    quote! {#ident.0}
+                } else {
+                    ident
+                };
                 quote! {
                     if #ident != #default {
                         #encoded_len_fn(#tag, &#ident)
@@ -180,10 +229,29 @@ impl Field {
                     }
                 }
             }
-            Kind::Optional(..) => quote! {
-                #ident.as_ref().map_or(0, |value| #encoded_len_fn(#tag, value))
+            Kind::Optional(..) => {
+                if self.wrapper.is_some() {
+                    quote! {
+                        #ident.as_ref().map_or(0, |value| #encoded_len_fn(#tag, &value.0))
+                    }
+                } else {
+                    quote! {
+                        #ident.as_ref().map_or(0, |value| #encoded_len_fn(#tag, value))
+                    }
+                }
             },
-            Kind::Required(..) | Kind::Repeated | Kind::Packed => quote! {
+            Kind::Packed => {
+                let ident = if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {#type_name::raw_slice(&#ident)}
+                } else {
+                    quote! {&#ident}
+                };
+                quote! {
+                    #encoded_len_fn(#tag, #ident)
+                }
+            }
+            Kind::Required(..) | Kind::Repeated => quote! {
                 #encoded_len_fn(#tag, &#ident)
             },
         }
@@ -192,6 +260,11 @@ impl Field {
     pub fn clear(&self, ident: TokenStream) -> TokenStream {
         match self.kind {
             Kind::Plain(ref default) | Kind::Required(ref default) => {
+                let ident = if self.wrapper.is_some() {
+                    quote! {#ident.0}
+                } else {
+                    ident
+                };
                 let default = default.typed();
                 match self.ty {
                     Ty::String | Ty::Bytes(..) => quote!(#ident.clear()),
@@ -206,7 +279,15 @@ impl Field {
     /// Returns an expression which evaluates to the default value of the field.
     pub fn default(&self) -> TokenStream {
         match self.kind {
-            Kind::Plain(ref value) | Kind::Required(ref value) => value.owned(),
+            Kind::Plain(ref value) | Kind::Required(ref value) => {
+                let value = value.owned();
+                if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {Into::<#type_name>::into(#value)}
+                } else {
+                    value
+                }
+            }
             Kind::Optional(_) => quote!(::core::option::Option::None),
             Kind::Repeated | Kind::Packed => quote!(::prost::alloc::vec::Vec::new()),
         }
@@ -241,18 +322,30 @@ impl Field {
         let inner_ty = self.ty.rust_type();
         match self.kind {
             Kind::Plain(_) | Kind::Required(_) => self.debug_inner(wrapper_name),
-            Kind::Optional(_) => quote! {
-                struct #wrapper_name<'a>(&'a ::core::option::Option<#inner_ty>);
-                impl<'a> ::core::fmt::Debug for #wrapper_name<'a> {
-                    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-                        #wrapper
-                        ::core::fmt::Debug::fmt(&self.0.as_ref().map(Inner), f)
+            Kind::Optional(_) => {
+                let wrapper_inner = if let Some(wrapper) = &self.wrapper {
+                    wrapper.type_name.clone()
+                } else {
+                    quote! {#inner_ty}
+                };
+                quote! {
+                    struct #wrapper_name<'a>(&'a ::core::option::Option<#wrapper_inner>);
+                    impl<'a> ::core::fmt::Debug for #wrapper_name<'a> {
+                        fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+                            #wrapper
+                            ::core::fmt::Debug::fmt(&self.0.as_ref().map(Inner), f)
+                        }
                     }
                 }
             },
             Kind::Repeated | Kind::Packed => {
+                let wrapper_inner = if let Some(wrapper) = &self.wrapper {
+                    wrapper.type_name.clone()
+                } else {
+                    quote! {#inner_ty}
+                };
                 quote! {
-                    struct #wrapper_name<'a>(&'a ::prost::alloc::vec::Vec<#inner_ty>);
+                    struct #wrapper_name<'a>(&'a ::prost::alloc::vec::Vec<#wrapper_inner>);
                     impl<'a> ::core::fmt::Debug for #wrapper_name<'a> {
                         fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
                             let mut vec_builder = f.debug_list();
@@ -366,12 +459,27 @@ impl Field {
                 ident_str,
             );
 
+            let return_type = if let Some(wrapper) = &self.wrapper {
+                &wrapper.type_name
+            } else {
+                &ty
+            };
+
+            let on_none = if let Some(wrapper) = &self.wrapper {
+                let type_name = &wrapper.type_name;
+                quote! {
+                    Into::<#type_name>::into(#default)
+                }
+            } else {
+                quote! {#default}
+            };
+
             Some(quote! {
                 #[doc=#get_doc]
-                pub fn #get(&self) -> #ty {
+                pub fn #get(&self) -> #return_type {
                     match self.#ident {
                         #match_some
-                        ::core::option::Option::None => #default,
+                        ::core::option::Option::None => #on_none,
                     }
                 }
             })
@@ -823,6 +931,32 @@ impl ToTokens for DefaultValue {
             }
             DefaultValue::Enumeration(ref value) => value.to_tokens(tokens),
             DefaultValue::Path(ref value) => value.to_tokens(tokens),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Wrapper {
+    pub type_name: TokenStream,
+}
+
+impl Wrapper {
+    pub fn from_attr(attr: &Meta) -> Result<Option<Self>, Error> {
+        if !attr.path().is_ident("wrapper") {
+            Ok(None)
+        } else if let Meta::NameValue(MetaNameValue {
+            value:
+                Expr::Lit(ExprLit {
+                    lit: Lit::Str(ref lit_str),
+                    ..
+                }),
+            ..
+        }) = *attr
+        {
+            let type_name = TokenStream::from_str(&lit_str.value()).unwrap();
+            Ok(Some(Self { type_name }))
+        } else {
+            bail!("invalid default value attribute: {:?}", attr)
         }
     }
 }

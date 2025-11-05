@@ -4,6 +4,7 @@
 
 extern crate alloc;
 extern crate proc_macro;
+extern crate core;
 
 use anyhow::{bail, Error};
 use itertools::Itertools;
@@ -15,7 +16,7 @@ use syn::{
 };
 
 mod field;
-use crate::field::Field;
+use crate::field::{scalar, Field};
 
 fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
     let input: DeriveInput = syn::parse2(input)?;
@@ -115,10 +116,34 @@ fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
         let merge = field.merge(quote!(value));
         let tags = field.tags().into_iter().map(|tag| quote!(#tag));
         let tags = Itertools::intersperse(tags, quote!(|));
+        let field_ident_value = match field {
+            Field::Scalar(scalar_field) => {
+                if let Some(wrapper) = &scalar_field.wrapper {
+                    match scalar_field.kind {
+                        scalar::Kind::Plain(_) => {
+                            quote! {&mut self.#field_ident.0}
+                        }
+                        scalar::Kind::Packed => {
+                            let type_name = &wrapper.type_name;
+                            quote! {#type_name::mut_raw_vec(&mut self.#field_ident)}
+                        }
+                        scalar::Kind::Optional(_) => {
+                            quote! {&mut self.#field_ident}
+                        }
+                        _ => unreachable!()
+                    }
+                } else {
+                    quote! {&mut self.#field_ident}
+                }
+            }
+            _ => {
+                quote! {&mut self.#field_ident}
+            }
+        };
 
         quote! {
             #(#tags)* => {
-                let mut value = &mut self.#field_ident;
+                let mut value = #field_ident_value;
                 #merge.map_err(|mut error| {
                     error.push(STRUCT_NAME, stringify!(#field_ident));
                     error
