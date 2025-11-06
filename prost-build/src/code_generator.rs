@@ -496,6 +496,29 @@ impl CodeGenerator<'_> {
             }
         }
 
+        let wrapper_type_name = match self
+            .config
+            .field_wrappers
+            .get_field(fq_message_name, field.descriptor.name())
+            .collect_vec()
+            .as_slice()
+        {
+            [] => None,
+            slice @ [first, rest @ ..] => {
+                if !rest.is_empty() {
+                    panic!(
+                        "multiple wrapper declared on {} {}: {:?}",
+                        fq_message_name,
+                        field.descriptor.name(),
+                        slice
+                    );
+                }
+                self.buf.push_str("\", wrapper = \"");
+                self.buf.push_str(first);
+                Some((*first).clone())
+            }
+        };
+
         self.buf.push_str("\")]\n");
         self.append_field_attributes(fq_message_name, field.descriptor.name());
         self.push_indent();
@@ -515,7 +538,11 @@ impl CodeGenerator<'_> {
             self.buf
                 .push_str(&format!("{}::alloc::boxed::Box<", prost_path));
         }
-        self.buf.push_str(&ty);
+        if let Some(ty) = wrapper_type_name {
+            self.buf.push_str(&ty);
+        } else {
+            self.buf.push_str(&ty);
+        }
         if boxed {
             self.buf.push('>');
         }
