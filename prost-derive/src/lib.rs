@@ -3,8 +3,8 @@
 #![recursion_limit = "4096"]
 
 extern crate alloc;
-extern crate proc_macro;
 extern crate core;
+extern crate proc_macro;
 
 use anyhow::{bail, Error};
 use itertools::Itertools;
@@ -74,9 +74,11 @@ fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
                     Some(Ok((field_ident, field)))
                 }
                 Ok(None) => None,
-                Err(err) => Some(Err(
-                    err.context(format!("invalid message field {}.{}", ident, field_ident))
-                )),
+                Err(err) => {
+                    let context =
+                        format!("invalid message field {}.{}: {:?}", ident, field_ident, err);
+                    Some(Err(err.context(context)))
+                }
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -130,7 +132,7 @@ fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
                         scalar::Kind::Optional(_) => {
                             quote! {&mut self.#field_ident}
                         }
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 } else {
                     quote! {&mut self.#field_ident}
