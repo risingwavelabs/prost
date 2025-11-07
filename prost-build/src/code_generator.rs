@@ -414,6 +414,29 @@ impl<'b> CodeGenerator<'_, 'b> {
         }
     }
 
+    fn wrapper_type_name(&self, fq_message_name: &str, field: &Field) -> Option<String> {
+        match self
+            .config
+            .field_wrappers
+            .get_field(fq_message_name, field.descriptor.name())
+            .collect_vec()
+            .as_slice()
+        {
+            [] => None,
+            slice @ [first, rest @ ..] => {
+                if !rest.is_empty() {
+                    panic!(
+                        "multiple wrapper declared on {} {}: {:?}",
+                        fq_message_name,
+                        field.descriptor.name(),
+                        slice
+                    );
+                }
+                Some((*first).clone())
+            }
+        }
+    }
+
     fn append_field(&mut self, fq_message_name: &str, field: &Field) {
         let type_ = field.descriptor.r#type();
         let repeated = field.descriptor.label() == Label::Repeated;
@@ -509,28 +532,11 @@ impl<'b> CodeGenerator<'_, 'b> {
             }
         }
 
-        let wrapper_type_name = match self
-            .config
-            .field_wrappers
-            .get_field(fq_message_name, field.descriptor.name())
-            .collect_vec()
-            .as_slice()
-        {
-            [] => None,
-            slice @ [first, rest @ ..] => {
-                if !rest.is_empty() {
-                    panic!(
-                        "multiple wrapper declared on {} {}: {:?}",
-                        fq_message_name,
-                        field.descriptor.name(),
-                        slice
-                    );
-                }
-                self.buf.push_str("\", wrapper = \"");
-                self.buf.push_str(first);
-                Some((*first).clone())
-            }
-        };
+        let wrapper_type_name = self.wrapper_type_name(fq_message_name, field);
+        if let Some(type_name) = &wrapper_type_name {
+            self.buf.push_str("\", wrapper = \"");
+            self.buf.push_str(type_name);
+        }
 
         self.buf.push_str("\")]\n");
         self.append_field_attributes(fq_message_name, field.descriptor.name());
@@ -591,13 +597,20 @@ impl<'b> CodeGenerator<'_, 'b> {
         let key_tag = self.field_type_tag(key);
         let value_tag = self.map_value_type_tag(value);
 
+        let wrapper_type_name = self.wrapper_type_name(fq_message_name, field);
+        let wrapper_attribute = wrapper_type_name
+            .as_ref()
+            .map(|type_name| format!(", wrapper=\"{}\"", type_name))
+            .unwrap_or_default();
+
         self.buf.push_str(&format!(
-            "#[prost({} = \"{}, {}\", tag = \"{}\")]\n",
+            "#[prost({} = \"{}, {}\", tag = \"{}\"{wrapper_attribute})]\n",
             map_type.annotation(),
             key_tag,
             value_tag,
             field.descriptor.number()
         ));
+        let key_ty = wrapper_type_name.unwrap_or(key_ty);
         self.append_field_attributes(fq_message_name, field.descriptor.name());
         self.push_indent();
         match map_type {

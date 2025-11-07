@@ -4,6 +4,7 @@ mod message;
 mod oneof;
 pub(crate) mod scalar;
 
+use core::str::FromStr;
 use std::fmt;
 use std::slice;
 
@@ -352,5 +353,31 @@ fn tags_attr(attr: &Meta) -> Result<Option<Vec<u32>>, Error> {
             .collect::<Result<Vec<u32>, _>>()
             .map(Some),
         _ => bail!("invalid tag attribute: {attr:?}"),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Wrapper {
+    pub type_name: TokenStream,
+}
+
+impl Wrapper {
+    pub fn from_attr(attr: &Meta) -> Result<Option<Self>, Error> {
+        if !attr.path().is_ident("wrapper") {
+            Ok(None)
+        } else if let Meta::NameValue(MetaNameValue {
+            value:
+                Expr::Lit(ExprLit {
+                    lit: Lit::Str(ref lit_str),
+                    ..
+                }),
+            ..
+        }) = *attr
+        {
+            let type_name = TokenStream::from_str(&lit_str.value()).unwrap();
+            Ok(Some(Self { type_name }))
+        } else {
+            bail!("invalid default value attribute: {:?}", attr)
+        }
     }
 }

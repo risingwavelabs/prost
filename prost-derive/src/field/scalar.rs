@@ -1,4 +1,3 @@
-use core::str::FromStr;
 use std::fmt;
 
 use anyhow::{anyhow, bail, Error};
@@ -6,7 +5,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{parse_str, Expr, ExprLit, Ident, Index, Lit, LitByteStr, Meta, MetaNameValue, Path};
 
-use crate::field::{bool_attr, set_option, tag_attr, Label};
+use crate::field::{bool_attr, set_option, tag_attr, Label, Wrapper};
 
 /// A scalar protobuf field.
 #[derive(Clone)]
@@ -150,7 +149,7 @@ impl Field {
                         #encode_fn(#tag, #value, buf);
                     }
                 }
-            },
+            }
             Kind::Packed => {
                 let ident = if let Some(wrapper) = &self.wrapper {
                     let type_name = &wrapper.type_name;
@@ -198,7 +197,7 @@ impl Field {
                           ctx)
                     }
                 }
-            },
+            }
         }
     }
 
@@ -239,7 +238,7 @@ impl Field {
                         #ident.as_ref().map_or(0, |value| #encoded_len_fn(#tag, value))
                     }
                 }
-            },
+            }
             Kind::Packed => {
                 let ident = if let Some(wrapper) = &self.wrapper {
                     let type_name = &wrapper.type_name;
@@ -337,7 +336,7 @@ impl Field {
                         }
                     }
                 }
-            },
+            }
             Kind::Repeated | Kind::Packed => {
                 let wrapper_inner = if let Some(wrapper) = &self.wrapper {
                     wrapper.type_name.clone()
@@ -927,32 +926,6 @@ impl ToTokens for DefaultValue {
             }
             DefaultValue::Enumeration(ref value) => value.to_tokens(tokens),
             DefaultValue::Path(ref value) => value.to_tokens(tokens),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Wrapper {
-    pub type_name: TokenStream,
-}
-
-impl Wrapper {
-    pub fn from_attr(attr: &Meta) -> Result<Option<Self>, Error> {
-        if !attr.path().is_ident("wrapper") {
-            Ok(None)
-        } else if let Meta::NameValue(MetaNameValue {
-            value:
-                Expr::Lit(ExprLit {
-                    lit: Lit::Str(ref lit_str),
-                    ..
-                }),
-            ..
-        }) = *attr
-        {
-            let type_name = TokenStream::from_str(&lit_str.value()).unwrap();
-            Ok(Some(Self { type_name }))
-        } else {
-            bail!("invalid default value attribute: {:?}", attr)
         }
     }
 }

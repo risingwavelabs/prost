@@ -3,8 +3,8 @@
 #![recursion_limit = "4096"]
 
 extern crate alloc;
-extern crate proc_macro;
 extern crate core;
+extern crate proc_macro;
 
 use anyhow::{bail, Context, Error};
 use itertools::Itertools;
@@ -127,7 +127,7 @@ fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
                         scalar::Kind::Optional(_) => {
                             quote! {&mut self.#field_ident}
                         }
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 } else {
                     quote! {&mut self.#field_ident}
