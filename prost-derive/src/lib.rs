@@ -127,7 +127,7 @@ fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
                         }
                         scalar::Kind::Packed => {
                             let type_name = &wrapper.type_name;
-                            quote! {#type_name::mut_raw_vec(&mut self.#field_ident)}
+                            quote! {::prost::wrapper::mut_raw_vec::<#type_name>(&mut self.#field_ident)}
                         }
                         scalar::Kind::Optional(_) => {
                             quote! {&mut self.#field_ident}

@@ -358,6 +358,7 @@ fn tags_attr(attr: &Meta) -> Result<Option<Vec<u32>>, Error> {
 #[derive(Clone, Debug)]
 pub struct Wrapper {
     pub type_name: TokenStream,
+    pub value_type_name: Option<TokenStream>,
 }
 
 impl Wrapper {
@@ -373,10 +374,26 @@ impl Wrapper {
             ..
         }) = *attr
         {
-            let type_name = TokenStream::from_str(&lit_str.value()).unwrap();
-            Ok(Some(Self { type_name }))
+            let wrapper_str = lit_str.value();
+            // Check if it's a map wrapper with "key -> value" syntax
+            if let Some(arrow_pos) = wrapper_str.find("->") {
+                let key_type = wrapper_str[..arrow_pos].trim();
+                let value_type = wrapper_str[arrow_pos + 2..].trim();
+                let type_name = TokenStream::from_str(key_type).unwrap();
+                let value_type_name = Some(TokenStream::from_str(value_type).unwrap());
+                Ok(Some(Self {
+                    type_name,
+                    value_type_name,
+                }))
+            } else {
+                let type_name = TokenStream::from_str(&wrapper_str).unwrap();
+                Ok(Some(Self {
+                    type_name,
+                    value_type_name: None,
+                }))
+            }
         } else {
-            bail!("invalid default value attribute: {:?}", attr)
+            bail!("invalid wrapper attribute: {:?}", attr)
         }
     }
 }
