@@ -38,13 +38,45 @@ impl MapTy {
 
     fn raw_map_ref_method(&self) -> TokenStream {
         let method = match self {
+            MapTy::HashMap => "raw_hash_map_key_ref",
+            MapTy::BTreeMap => "raw_btree_map_key_ref",
+        };
+        TokenStream::from_str(method).unwrap()
+    }
+
+    fn raw_map_mut_ref_method(&self) -> TokenStream {
+        let method = match self {
+            MapTy::HashMap => "raw_hash_map_key_mut_ref",
+            MapTy::BTreeMap => "raw_btree_map_key_mut_ref",
+        };
+        TokenStream::from_str(method).unwrap()
+    }
+
+    fn raw_map_value_ref_method(&self) -> TokenStream {
+        let method = match self {
+            MapTy::HashMap => "raw_hash_map_value_ref",
+            MapTy::BTreeMap => "raw_btree_map_value_ref",
+        };
+        TokenStream::from_str(method).unwrap()
+    }
+
+    fn raw_map_value_mut_ref_method(&self) -> TokenStream {
+        let method = match self {
+            MapTy::HashMap => "raw_hash_map_value_mut_ref",
+            MapTy::BTreeMap => "raw_btree_map_value_mut_ref",
+        };
+        TokenStream::from_str(method).unwrap()
+    }
+
+    fn raw_map_both_ref_method(&self) -> TokenStream {
+        let method = match self {
             MapTy::HashMap => "raw_hash_map_ref",
             MapTy::BTreeMap => "raw_btree_map_ref",
         };
         TokenStream::from_str(method).unwrap()
     }
 
-    fn raw_map_mut_ref_method(&self) -> TokenStream {
+    fn raw_map_both_mut_ref_method(&self) -> TokenStream {
         let method = match self {
             MapTy::HashMap => "raw_hash_map_mut_ref",
             MapTy::BTreeMap => "raw_btree_map_mut_ref",
@@ -70,6 +102,7 @@ pub struct Field {
     pub value_ty: ValueTy,
     pub tag: u32,
     pub key_wrapper: Option<Wrapper>,
+    pub value_wrapper: Option<TokenStream>,
 }
 
 impl Field {
@@ -131,19 +164,83 @@ impl Field {
         }
 
         Ok(match (types, tag.or(inferred_tag)) {
-            (Some((map_ty, key_ty, value_ty)), Some(tag)) => Some(Field {
-                map_ty,
-                key_ty,
-                value_ty,
-                tag,
-                key_wrapper,
-            }),
+            (Some((map_ty, key_ty, value_ty)), Some(tag)) => {
+                let value_wrapper = key_wrapper.as_ref().and_then(|w| w.value_type_name.clone());
+                Some(Field {
+                    map_ty,
+                    key_ty,
+                    value_ty,
+                    tag,
+                    key_wrapper,
+                    value_wrapper,
+                })
+            }
             _ => None,
         })
     }
 
     pub fn new_oneof(attrs: &[Meta]) -> Result<Option<Field>, Error> {
         Field::new(attrs, None)
+    }
+
+    /// Helper to wrap the map reference with key and/or value wrappers
+    fn apply_wrappers(&self, ident: TokenStream, is_mut: bool) -> TokenStream {
+        let has_key = self.key_wrapper.is_some();
+        let has_value = self.value_wrapper.is_some();
+
+        match (has_key, has_value) {
+            (false, false) => {
+                // No wrappers
+                if is_mut {
+                    quote! {&mut #ident}
+                } else {
+                    quote! {&#ident}
+                }
+            }
+            (true, true) => {
+                // Both key and value wrapped - use the "both" methods
+                let key_type = &self.key_wrapper.as_ref().unwrap().type_name;
+                let value_type = self.value_wrapper.as_ref().unwrap();
+                let method = if is_mut {
+                    self.map_ty.raw_map_both_mut_ref_method()
+                } else {
+                    self.map_ty.raw_map_both_ref_method()
+                };
+                if is_mut {
+                    quote! {::prost::wrapper::#method::<#key_type, #value_type>(&mut #ident)}
+                } else {
+                    quote! {::prost::wrapper::#method::<#key_type, #value_type>(&#ident)}
+                }
+            }
+            (true, false) => {
+                // Only key wrapped
+                let key_type = &self.key_wrapper.as_ref().unwrap().type_name;
+                let method = if is_mut {
+                    self.map_ty.raw_map_mut_ref_method()
+                } else {
+                    self.map_ty.raw_map_ref_method()
+                };
+                if is_mut {
+                    quote! {::prost::wrapper::#method::<#key_type, _>(&mut #ident)}
+                } else {
+                    quote! {::prost::wrapper::#method::<#key_type, _>(&#ident)}
+                }
+            }
+            (false, true) => {
+                // Only value wrapped
+                let value_type = self.value_wrapper.as_ref().unwrap();
+                let method = if is_mut {
+                    self.map_ty.raw_map_value_mut_ref_method()
+                } else {
+                    self.map_ty.raw_map_value_ref_method()
+                };
+                if is_mut {
+                    quote! {::prost::wrapper::#method::<_, #value_type>(&mut #ident)}
+                } else {
+                    quote! {::prost::wrapper::#method::<_, #value_type>(&#ident)}
+                }
+            }
+        }
     }
 
     /// Returns a statement which encodes the map field.
@@ -153,13 +250,7 @@ impl Field {
         let ke = quote!(#prost_path::encoding::#key_mod::encode);
         let kl = quote!(#prost_path::encoding::#key_mod::encoded_len);
         let module = self.map_ty.module();
-        let ident_value = if let Some(wrapper) = &self.key_wrapper {
-            let type_name = &wrapper.type_name;
-            let raw_map_ref = self.map_ty.raw_map_ref_method();
-            quote! {#type_name::#raw_map_ref(&#ident)}
-        } else {
-            quote! {&#ident}
-        };
+        let ident_value = self.apply_wrappers(ident, false);
         match &self.value_ty {
             ValueTy::Scalar(scalar::Ty::Enumeration(ty)) => {
                 let default = quote!(#ty::default() as i32);
@@ -212,13 +303,7 @@ impl Field {
         let key_mod = self.key_ty.module();
         let km = quote!(#prost_path::encoding::#key_mod::merge);
         let module = self.map_ty.module();
-        let ident_value = if let Some(wrapper) = &self.key_wrapper {
-            let type_name = &wrapper.type_name;
-            let raw_map_mut_ref = self.map_ty.raw_map_mut_ref_method();
-            quote! {#type_name::#raw_map_mut_ref(&mut #ident)}
-        } else {
-            quote! {&mut #ident}
-        };
+        let ident_value = self.apply_wrappers(ident, true);
         match &self.value_ty {
             ValueTy::Scalar(scalar::Ty::Enumeration(ty)) => {
                 let default = quote!(#ty::default() as i32);
@@ -256,13 +341,7 @@ impl Field {
         let key_mod = self.key_ty.module();
         let kl = quote!(#prost_path::encoding::#key_mod::encoded_len);
         let module = self.map_ty.module();
-        let ident_value = if let Some(wrapper) = &self.key_wrapper {
-            let type_name = &wrapper.type_name;
-            let raw_map_ref = self.map_ty.raw_map_ref_method();
-            quote! {#type_name::#raw_map_ref(&#ident)}
-        } else {
-            quote! {&#ident}
-        };
+        let ident_value = self.apply_wrappers(ident, false);
         match &self.value_ty {
             ValueTy::Scalar(scalar::Ty::Enumeration(ty)) => {
                 let default = quote!(#ty::default() as i32);
@@ -380,6 +459,11 @@ impl Field {
                 }
 
                 let value = ty.rust_type(prost_path);
+                let value = if let Some(wrapper) = &self.value_wrapper {
+                    wrapper.clone()
+                } else {
+                    value
+                };
                 quote! {
                     struct #wrapper_name<'a>(&'a ::#libname::collections::#type_name<#key, #value>);
                     impl<'a> ::core::fmt::Debug for #wrapper_name<'a> {
@@ -387,15 +471,30 @@ impl Field {
                     }
                 }
             }
-            ValueTy::Message => quote! {
-                struct #wrapper_name<'a, V: 'a>(&'a ::#libname::collections::#type_name<#key, V>);
-                impl<'a, V> ::core::fmt::Debug for #wrapper_name<'a, V>
-                where
-                    V: ::core::fmt::Debug + 'a,
-                {
-                    #fmt
+            ValueTy::Message => {
+                if self.value_wrapper.is_some() {
+                    let value_type = &self.value_wrapper;
+                    quote! {
+                        struct #wrapper_name<'a, V: 'a>(&'a ::#libname::collections::#type_name<#key, #value_type>);
+                        impl<'a, V> ::core::fmt::Debug for #wrapper_name<'a, V>
+                        where
+                            V: ::core::fmt::Debug + 'a,
+                        {
+                            #fmt
+                        }
+                    }
+                } else {
+                    quote! {
+                        struct #wrapper_name<'a, V: 'a>(&'a ::#libname::collections::#type_name<#key, V>);
+                        impl<'a, V> ::core::fmt::Debug for #wrapper_name<'a, V>
+                        where
+                            V: ::core::fmt::Debug + 'a,
+                        {
+                            #fmt
+                        }
+                    }
                 }
-            },
+            }
         }
     }
 }

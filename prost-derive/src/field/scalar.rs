@@ -153,7 +153,7 @@ impl Field {
             Kind::Packed => {
                 let ident = if let Some(wrapper) = &self.wrapper {
                     let type_name = &wrapper.type_name;
-                    quote! {#type_name::raw_slice(&#ident)}
+                    quote! {::prost::wrapper::raw_slice::<#type_name>(&#ident)}
                 } else {
                     quote! {&#ident}
                 };
@@ -242,7 +242,7 @@ impl Field {
             Kind::Packed => {
                 let ident = if let Some(wrapper) = &self.wrapper {
                     let type_name = &wrapper.type_name;
-                    quote! {#type_name::raw_slice(&#ident)}
+                    quote! {::prost::wrapper::raw_slice::<#type_name>(&#ident)}
                 } else {
                     quote! {&#ident}
                 };

@@ -598,6 +598,20 @@ impl<'b> CodeGenerator<'_, 'b> {
         let value_tag = self.map_value_type_tag(value);
 
         let wrapper_type_name = self.wrapper_type_name(fq_message_name, field);
+
+        // Parse wrapper string to extract key and value wrapper types
+        let (key_wrapper, value_wrapper) = if let Some(ref wrapper_str) = wrapper_type_name {
+            if let Some(arrow_pos) = wrapper_str.find("->") {
+                let key_type = wrapper_str[..arrow_pos].trim().to_string();
+                let value_type = wrapper_str[arrow_pos + 2..].trim().to_string();
+                (Some(key_type), Some(value_type))
+            } else {
+                (Some(wrapper_str.clone()), None)
+            }
+        } else {
+            (None, None)
+        };
+
         let wrapper_attribute = wrapper_type_name
             .as_ref()
             .map(|type_name| format!(", wrapper=\"{}\"", type_name))
@@ -610,7 +624,8 @@ impl<'b> CodeGenerator<'_, 'b> {
             value_tag,
             field.descriptor.number()
         ));
-        let key_ty = wrapper_type_name.unwrap_or(key_ty);
+        let key_ty = key_wrapper.unwrap_or(key_ty);
+        let value_ty = value_wrapper.unwrap_or(value_ty);
         self.append_field_attributes(fq_message_name, field.descriptor.name());
         self.push_indent();
         match map_type {

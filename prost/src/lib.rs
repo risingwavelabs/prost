@@ -14,6 +14,8 @@ mod message;
 mod name;
 mod types;
 
+pub mod wrapper;
+
 #[doc(hidden)]
 pub mod encoding;
 
@@ -23,6 +25,7 @@ pub use crate::encoding::length_delimiter::{
 pub use crate::error::{DecodeError, EncodeError, UnknownEnumValue};
 pub use crate::message::Message;
 pub use crate::name::Name;
+pub use crate::wrapper::TransparentOver;
 
 // See `encoding::DecodeContext` for more info.
 // 100 is the default recursion limit in the C++ implementation.
