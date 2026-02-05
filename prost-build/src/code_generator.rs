@@ -416,7 +416,7 @@ impl<'b> CodeGenerator<'_, 'b> {
 
     fn wrapper_type_name(&self, fq_message_name: &str, field: &Field) -> Option<String> {
         match self
-            .config
+            .config()
             .field_wrappers
             .get_field(fq_message_name, field.descriptor.name())
             .collect_vec()
