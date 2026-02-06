@@ -465,6 +465,20 @@ fn try_oneof(input: TokenStream) -> Result<TokenStream, Error> {
     let merge = fields.iter().map(|(variant_ident, field)| {
         let tag = field.tags()[0];
         let merge = field.merge(quote!(value));
+
+        // For wrapper types, we need to initialize with the wrapper's default
+        let has_wrapper = matches!(field, Field::Scalar(scalar::Field { wrapper: Some(_), .. }));
+        let owned_value_init = if has_wrapper {
+            if let Field::Scalar(scalar::Field { wrapper: Some(ref w), .. }) = field {
+                let type_name = &w.type_name;
+                quote! { <#type_name as ::core::default::Default>::default() }
+            } else {
+                unreachable!()
+            }
+        } else {
+            quote! { ::core::default::Default::default() }
+        };
+
         quote! {
             #tag => {
                 match field {
@@ -472,7 +486,7 @@ fn try_oneof(input: TokenStream) -> Result<TokenStream, Error> {
                         #merge
                     },
                     _ => {
-                        let mut owned_value = ::core::default::Default::default();
+                        let mut owned_value = #owned_value_init;
                         let value = &mut owned_value;
                         #merge.map(|_| *field = ::core::option::Option::Some(#ident::#variant_ident(owned_value)))
                     },
