@@ -161,7 +161,17 @@ impl Field {
                     #encode_fn(#tag, #ident, buf);
                 }
             }
-            Kind::Required(..) | Kind::Repeated => quote! {
+            Kind::Required(..) => {
+                let ident = if self.wrapper.is_some() {
+                    quote! {(#ident).0}
+                } else {
+                    ident
+                };
+                quote! {
+                    #encode_fn(#tag, &#ident, buf);
+                }
+            }
+            Kind::Repeated => quote! {
                 #encode_fn(#tag, &#ident, buf);
             },
         }
@@ -178,9 +188,20 @@ impl Field {
         let merge_fn = quote!(#prost_path::encoding::#module::#merge_fn);
 
         match self.kind {
-            Kind::Plain(..) | Kind::Required(..) | Kind::Repeated | Kind::Packed => quote! {
+            Kind::Plain(..) | Kind::Repeated | Kind::Packed => quote! {
                 #merge_fn(wire_type, #ident, buf, ctx)
             },
+            Kind::Required(..) => {
+                if self.wrapper.is_some() {
+                    quote! {
+                        #merge_fn(wire_type, &mut (#ident).0, buf, ctx)
+                    }
+                } else {
+                    quote! {
+                        #merge_fn(wire_type, #ident, buf, ctx)
+                    }
+                }
+            }
             Kind::Optional(..) => {
                 if self.wrapper.is_some() {
                     quote! {
@@ -250,7 +271,17 @@ impl Field {
                     #encoded_len_fn(#tag, #ident)
                 }
             }
-            Kind::Required(..) | Kind::Repeated => quote! {
+            Kind::Required(..) => {
+                let ident = if self.wrapper.is_some() {
+                    quote! {(#ident).0}
+                } else {
+                    ident
+                };
+                quote! {
+                    #encoded_len_fn(#tag, &#ident)
+                }
+            }
+            Kind::Repeated => quote! {
                 #encoded_len_fn(#tag, &#ident)
             },
         }

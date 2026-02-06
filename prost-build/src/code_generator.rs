@@ -727,15 +727,27 @@ impl<'b> CodeGenerator<'_, 'b> {
 
             self.push_indent();
             let ty_tag = self.field_type_tag(&field.descriptor);
+
+            let wrapper_type_name = self.wrapper_type_name(fq_message_name, field);
+            let wrapper_attribute = wrapper_type_name
+                .as_ref()
+                .map(|type_name| format!(", wrapper=\"{}\"", type_name))
+                .unwrap_or_default();
+
             self.buf.push_str(&format!(
-                "#[prost({}, tag = \"{}\")]\n",
+                "#[prost({}, tag = \"{}\"{})]\n",
                 ty_tag,
-                field.descriptor.number()
+                field.descriptor.number(),
+                wrapper_attribute,
             ));
             self.append_field_attributes(&oneof_name, field.descriptor.name());
 
             self.push_indent();
-            let ty = self.resolve_type(&field.descriptor, fq_message_name);
+            let ty = if let Some(ref wrapper_ty) = wrapper_type_name {
+                wrapper_ty.clone()
+            } else {
+                self.resolve_type(&field.descriptor, fq_message_name)
+            };
 
             let boxed = self.context.should_box_oneof_field(
                 fq_message_name,
