@@ -3,6 +3,7 @@
 #![recursion_limit = "4096"]
 
 extern crate alloc;
+extern crate core;
 extern crate proc_macro;
 
 use anyhow::{bail, Context, Error};
@@ -16,7 +17,7 @@ use syn::{
 use syn::{Attribute, Lit, Meta, MetaNameValue, Path, Token};
 
 mod field;
-use crate::field::Field;
+use crate::field::{scalar, Field};
 
 use self::field::set_option;
 
@@ -112,10 +113,34 @@ fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
         let merge = field.merge(&prost_path, quote!(value));
         let tags = field.tags().into_iter().map(|tag| quote!(#tag));
         let tags = Itertools::intersperse(tags, quote!(|));
+        let field_ident_value = match field {
+            Field::Scalar(scalar_field) => {
+                if let Some(wrapper) = &scalar_field.wrapper {
+                    let type_name = &wrapper.type_name;
+                    match scalar_field.kind {
+                        scalar::Kind::Plain(_) => {
+                            quote! {::prost::cast_to_raw_mut::<#type_name>(&mut self.#field_ident)}
+                        }
+                        scalar::Kind::Packed => {
+                            quote! {::prost::wrapper::mut_raw_vec::<#type_name>(&mut self.#field_ident)}
+                        }
+                        scalar::Kind::Optional(_) => {
+                            quote! {&mut self.#field_ident}
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    quote! {&mut self.#field_ident}
+                }
+            }
+            _ => {
+                quote! {&mut self.#field_ident}
+            }
+        };
 
         quote! {
             #(#tags)* => {
-                let mut value = &mut self.#field_ident;
+                let mut value = #field_ident_value;
                 #merge.map_err(|mut error| {
                     error.push(STRUCT_NAME, stringify!(#field_ident));
                     error
@@ -442,14 +467,33 @@ fn try_oneof(input: TokenStream) -> Result<TokenStream, Error> {
     let merge = fields.iter().map(|(variant_ident, field, deprecated)| {
         let tag = field.tags()[0];
         let merge = field.merge(&prost_path, quote!(value));
+
+        // For wrapper types, we need to initialize with the wrapper's default
+        let has_wrapper = matches!(field, Field::Scalar(scalar::Field { wrapper: Some(_), .. }));
+        let owned_value_init = if has_wrapper {
+            if let Field::Scalar(scalar::Field { wrapper: Some(ref w), .. }) = field {
+                let type_name = &w.type_name;
+                quote! { <#type_name as ::core::default::Default>::default() }
+            } else {
+                unreachable!()
+            }
+        } else {
+            quote! { ::core::default::Default::default() }
+        };
+
         quote! {
             #deprecated
-            #tag => if let ::core::option::Option::Some(#ident::#variant_ident(value)) = field {
-                #merge
-            } else {
-                let mut owned_value = ::core::default::Default::default();
-                let value = &mut owned_value;
-                #merge.map(|_| *field = ::core::option::Option::Some(#deprecated #ident::#variant_ident(owned_value)))
+            #tag => {
+                match field {
+                    ::core::option::Option::Some(#ident::#variant_ident(ref mut value)) => {
+                        #merge
+                    },
+                    _ => {
+                        let mut owned_value = #owned_value_init;
+                        let value = &mut owned_value;
+                        #merge.map(|_| *field = ::core::option::Option::Some(#ident::#variant_ident(owned_value)))
+                    },
+                }
             }
         }
     });

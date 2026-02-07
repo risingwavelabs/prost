@@ -414,6 +414,29 @@ impl<'b> CodeGenerator<'_, 'b> {
         }
     }
 
+    fn wrapper_type_name(&self, fq_message_name: &str, field: &Field) -> Option<String> {
+        match self
+            .config()
+            .field_wrappers
+            .get_field(fq_message_name, field.descriptor.name())
+            .collect_vec()
+            .as_slice()
+        {
+            [] => None,
+            slice @ [first, rest @ ..] => {
+                if !rest.is_empty() {
+                    panic!(
+                        "multiple wrapper declared on {} {}: {:?}",
+                        fq_message_name,
+                        field.descriptor.name(),
+                        slice
+                    );
+                }
+                Some((*first).clone())
+            }
+        }
+    }
+
     fn append_field(&mut self, fq_message_name: &str, field: &Field) {
         let type_ = field.descriptor.r#type();
         let repeated = field.descriptor.label() == Label::Repeated;
@@ -509,6 +532,12 @@ impl<'b> CodeGenerator<'_, 'b> {
             }
         }
 
+        let wrapper_type_name = self.wrapper_type_name(fq_message_name, field);
+        if let Some(type_name) = &wrapper_type_name {
+            self.buf.push_str("\", wrapper = \"");
+            self.buf.push_str(type_name);
+        }
+
         self.buf.push_str("\")]\n");
         self.append_field_attributes(fq_message_name, field.descriptor.name());
         self.push_indent();
@@ -528,7 +557,11 @@ impl<'b> CodeGenerator<'_, 'b> {
             self.buf
                 .push_str(&format!("{prost_path}::alloc::boxed::Box<"));
         }
-        self.buf.push_str(&ty);
+        if let Some(ty) = wrapper_type_name {
+            self.buf.push_str(&ty);
+        } else {
+            self.buf.push_str(&ty);
+        }
         if boxed {
             self.buf.push('>');
         }
@@ -564,13 +597,35 @@ impl<'b> CodeGenerator<'_, 'b> {
         let key_tag = self.field_type_tag(key);
         let value_tag = self.map_value_type_tag(value);
 
+        let wrapper_type_name = self.wrapper_type_name(fq_message_name, field);
+
+        // Parse wrapper string to extract key and value wrapper types
+        let (key_wrapper, value_wrapper) = if let Some(ref wrapper_str) = wrapper_type_name {
+            if let Some(arrow_pos) = wrapper_str.find("->") {
+                let key_type = wrapper_str[..arrow_pos].trim().to_string();
+                let value_type = wrapper_str[arrow_pos + 2..].trim().to_string();
+                (Some(key_type), Some(value_type))
+            } else {
+                (Some(wrapper_str.clone()), None)
+            }
+        } else {
+            (None, None)
+        };
+
+        let wrapper_attribute = wrapper_type_name
+            .as_ref()
+            .map(|type_name| format!(", wrapper=\"{}\"", type_name))
+            .unwrap_or_default();
+
         self.buf.push_str(&format!(
-            "#[prost({} = \"{}, {}\", tag = \"{}\")]\n",
+            "#[prost({} = \"{}, {}\", tag = \"{}\"{wrapper_attribute})]\n",
             map_type.annotation(),
             key_tag,
             value_tag,
             field.descriptor.number()
         ));
+        let key_ty = key_wrapper.unwrap_or(key_ty);
+        let value_ty = value_wrapper.unwrap_or(value_ty);
         self.append_field_attributes(fq_message_name, field.descriptor.name());
         self.push_indent();
         match map_type {
@@ -672,15 +727,27 @@ impl<'b> CodeGenerator<'_, 'b> {
 
             self.push_indent();
             let ty_tag = self.field_type_tag(&field.descriptor);
+
+            let wrapper_type_name = self.wrapper_type_name(fq_message_name, field);
+            let wrapper_attribute = wrapper_type_name
+                .as_ref()
+                .map(|type_name| format!(", wrapper=\"{}\"", type_name))
+                .unwrap_or_default();
+
             self.buf.push_str(&format!(
-                "#[prost({}, tag = \"{}\")]\n",
+                "#[prost({}, tag = \"{}\"{})]\n",
                 ty_tag,
-                field.descriptor.number()
+                field.descriptor.number(),
+                wrapper_attribute,
             ));
             self.append_field_attributes(&oneof_name, field.descriptor.name());
 
             self.push_indent();
-            let ty = self.resolve_type(&field.descriptor, fq_message_name);
+            let ty = if let Some(ref wrapper_ty) = wrapper_type_name {
+                wrapper_ty.clone()
+            } else {
+                self.resolve_type(&field.descriptor, fq_message_name)
+            };
 
             let boxed = self.context.should_box_oneof_field(
                 fq_message_name,
