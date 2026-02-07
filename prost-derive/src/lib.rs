@@ -121,12 +121,12 @@ fn try_message(input: TokenStream) -> Result<TokenStream, Error> {
         let field_ident_value = match field {
             Field::Scalar(scalar_field) => {
                 if let Some(wrapper) = &scalar_field.wrapper {
+                    let type_name = &wrapper.type_name;
                     match scalar_field.kind {
                         scalar::Kind::Plain(_) => {
-                            quote! {&mut self.#field_ident.0}
+                            quote! {::prost::cast_to_raw_mut::<#type_name>(&mut self.#field_ident)}
                         }
                         scalar::Kind::Packed => {
-                            let type_name = &wrapper.type_name;
                             quote! {::prost::wrapper::mut_raw_vec::<#type_name>(&mut self.#field_ident)}
                         }
                         scalar::Kind::Optional(_) => {
