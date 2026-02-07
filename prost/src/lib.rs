@@ -25,7 +25,7 @@ pub use crate::encoding::length_delimiter::{
 pub use crate::error::{DecodeError, EncodeError, UnknownEnumValue};
 pub use crate::message::Message;
 pub use crate::name::Name;
-pub use crate::wrapper::TransparentOver;
+pub use crate::wrapper::{cast_from_raw, cast_to_raw_mut, cast_to_raw_ref, TransparentOver};
 
 // See `encoding::DecodeContext` for more info.
 // 100 is the default recursion limit in the C++ implementation.

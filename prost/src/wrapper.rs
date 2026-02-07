@@ -13,9 +13,47 @@
 /// collections containing these types.
 ///
 /// Implementing this trait incorrectly can lead to undefined behavior.
-pub unsafe trait TransparentOver {
+pub unsafe trait TransparentOver: Sized {
     /// The inner type that this wrapper is transparent over.
     type Inner;
+}
+
+/// Casts a reference to a wrapper type to a reference to the inner type.
+///
+/// # Safety
+///
+/// This is safe when `T: TransparentOver` with `#[repr(transparent)]` over `T::Inner`.
+#[doc(hidden)]
+#[inline]
+pub fn cast_to_raw_ref<T: TransparentOver>(value: &T) -> &T::Inner {
+    // SAFETY: T is #[repr(transparent)] over T::Inner
+    unsafe { &*(value as *const T as *const T::Inner) }
+}
+
+/// Casts a mutable reference to a wrapper type to a mutable reference to the inner type.
+///
+/// # Safety
+///
+/// This is safe when `T: TransparentOver` with `#[repr(transparent)]` over `T::Inner`.
+#[doc(hidden)]
+#[inline]
+pub fn cast_to_raw_mut<T: TransparentOver>(value: &mut T) -> &mut T::Inner {
+    // SAFETY: T is #[repr(transparent)] over T::Inner
+    unsafe { &mut *(value as *mut T as *mut T::Inner) }
+}
+
+/// Creates a wrapper from the inner type.
+///
+/// # Safety
+///
+/// This is safe when `T: TransparentOver` with `#[repr(transparent)]` over `T::Inner`.
+#[doc(hidden)]
+#[inline]
+pub fn cast_from_raw<T: TransparentOver>(inner: T::Inner) -> T {
+    // SAFETY: T is #[repr(transparent)] over T::Inner, so they have identical layout.
+    // We use ManuallyDrop to prevent double-free, then read the bytes as T.
+    let inner = core::mem::ManuallyDrop::new(inner);
+    unsafe { core::ptr::read(&*inner as *const T::Inner as *const T) }
 }
 
 /// Casts a slice of wrapper types to a slice of inner types.

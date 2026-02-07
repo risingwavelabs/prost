@@ -126,21 +126,23 @@ impl Field {
 
         match self.kind {
             Kind::Plain(ref default) => {
-                let ident = if self.wrapper.is_some() {
-                    quote! {#ident.0}
+                let ident = if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {::prost::cast_to_raw_ref::<#type_name>(&#ident)}
                 } else {
-                    ident
+                    quote! {&#ident}
                 };
                 let default = default.typed();
                 quote! {
-                    if #ident != #default {
-                        #encode_fn(#tag, &#ident, buf);
+                    if *#ident != #default {
+                        #encode_fn(#tag, #ident, buf);
                     }
                 }
             }
             Kind::Optional(..) => {
-                let value = if self.wrapper.is_some() {
-                    quote! {&value.0}
+                let value = if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {::prost::cast_to_raw_ref::<#type_name>(value)}
                 } else {
                     quote! {value}
                 };
@@ -162,13 +164,14 @@ impl Field {
                 }
             }
             Kind::Required(..) => {
-                let ident = if self.wrapper.is_some() {
-                    quote! {(#ident).0}
+                let ident = if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {::prost::cast_to_raw_ref::<#type_name>(&(#ident))}
                 } else {
-                    ident
+                    quote! {&#ident}
                 };
                 quote! {
-                    #encode_fn(#tag, &#ident, buf);
+                    #encode_fn(#tag, #ident, buf);
                 }
             }
             Kind::Repeated => quote! {
@@ -192,9 +195,10 @@ impl Field {
                 #merge_fn(wire_type, #ident, buf, ctx)
             },
             Kind::Required(..) => {
-                if self.wrapper.is_some() {
+                if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
                     quote! {
-                        #merge_fn(wire_type, &mut (#ident).0, buf, ctx)
+                        #merge_fn(wire_type, ::prost::cast_to_raw_mut::<#type_name>(#ident), buf, ctx)
                     }
                 } else {
                     quote! {
@@ -203,10 +207,11 @@ impl Field {
                 }
             }
             Kind::Optional(..) => {
-                if self.wrapper.is_some() {
+                if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
                     quote! {
                         #merge_fn(wire_type,
-                          &mut #ident.get_or_insert_with(::core::default::Default::default).0,
+                          ::prost::cast_to_raw_mut::<#type_name>(#ident.get_or_insert_with(::core::default::Default::default)),
                           buf,
                           ctx)
                     }
@@ -236,23 +241,25 @@ impl Field {
         match self.kind {
             Kind::Plain(ref default) => {
                 let default = default.typed();
-                let ident = if self.wrapper.is_some() {
-                    quote! {#ident.0}
+                let ident = if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {::prost::cast_to_raw_ref::<#type_name>(&#ident)}
                 } else {
-                    ident
+                    quote! {&#ident}
                 };
                 quote! {
-                    if #ident != #default {
-                        #encoded_len_fn(#tag, &#ident)
+                    if *#ident != #default {
+                        #encoded_len_fn(#tag, #ident)
                     } else {
                         0
                     }
                 }
             }
             Kind::Optional(..) => {
-                if self.wrapper.is_some() {
+                if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
                     quote! {
-                        #ident.as_ref().map_or(0, |value| #encoded_len_fn(#tag, &value.0))
+                        #ident.as_ref().map_or(0, |value| #encoded_len_fn(#tag, ::prost::cast_to_raw_ref::<#type_name>(value)))
                     }
                 } else {
                     quote! {
@@ -272,13 +279,14 @@ impl Field {
                 }
             }
             Kind::Required(..) => {
-                let ident = if self.wrapper.is_some() {
-                    quote! {(#ident).0}
+                let ident = if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    quote! {::prost::cast_to_raw_ref::<#type_name>(&(#ident))}
                 } else {
-                    ident
+                    quote! {&#ident}
                 };
                 quote! {
-                    #encoded_len_fn(#tag, &#ident)
+                    #encoded_len_fn(#tag, #ident)
                 }
             }
             Kind::Repeated => quote! {
@@ -290,15 +298,22 @@ impl Field {
     pub fn clear(&self, ident: TokenStream) -> TokenStream {
         match self.kind {
             Kind::Plain(ref default) | Kind::Required(ref default) => {
-                let ident = if self.wrapper.is_some() {
-                    quote! {#ident.0}
-                } else {
-                    ident
-                };
                 let default = default.typed();
-                match self.ty {
-                    Ty::String | Ty::Bytes(..) => quote!(#ident.clear()),
-                    _ => quote!(#ident = #default),
+                if let Some(wrapper) = &self.wrapper {
+                    let type_name = &wrapper.type_name;
+                    match self.ty {
+                        Ty::String | Ty::Bytes(..) => {
+                            quote!(::prost::cast_to_raw_mut::<#type_name>(&mut #ident).clear())
+                        }
+                        _ => {
+                            quote!(*::prost::cast_to_raw_mut::<#type_name>(&mut #ident) = #default)
+                        }
+                    }
+                } else {
+                    match self.ty {
+                        Ty::String | Ty::Bytes(..) => quote!(#ident.clear()),
+                        _ => quote!(#ident = #default),
+                    }
                 }
             }
             Kind::Optional(_) => quote!(#ident = ::core::option::Option::None),
@@ -313,7 +328,7 @@ impl Field {
                 let value = value.owned(prost_path);
                 if let Some(wrapper) = &self.wrapper {
                     let type_name = &wrapper.type_name;
-                    quote! {Into::<#type_name>::into(#value)}
+                    quote! {::prost::cast_from_raw::<#type_name>(#value)}
                 } else {
                     value
                 }
@@ -494,7 +509,7 @@ impl Field {
             let on_none = if let Some(wrapper) = &self.wrapper {
                 let type_name = &wrapper.type_name;
                 quote! {
-                    Into::<#type_name>::into(#default)
+                    ::prost::cast_from_raw::<#type_name>(#default)
                 }
             } else {
                 quote! {#default}
